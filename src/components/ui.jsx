@@ -7,12 +7,12 @@ export const Card = ({ children, className = '' }) => (
 
 export const SectionTitle = ({ children, sub }) => (
   <div className="mb-5">
-    <h2 className="text-xl font-bold text-emerald-900">{children}</h2>
+    <h2 className="text-xl font-bold text-brand-navy">{children}</h2>
     {sub && <p className="text-sm text-stone-500 mt-1">{sub}</p>}
   </div>
 );
 
-export const Stat = ({ label, value, sub, accent = 'text-emerald-900' }) => (
+export const Stat = ({ label, value, sub, accent = 'text-brand-navy' }) => (
   <Card>
     <div className="text-xs font-semibold uppercase tracking-wide text-stone-500">{label}</div>
     <div className={`text-3xl font-extrabold mt-1 ${accent}`}>{value ?? '—'}</div>
@@ -40,7 +40,8 @@ export const ProgressBar = ({ perf, status }) => {
 
 export const Btn = ({ children, onClick, variant = 'primary', disabled, className = '', ...rest }) => {
   const styles = {
-    primary: 'bg-emerald-700 hover:bg-emerald-800 text-white',
+    primary: 'bg-brand-navy hover:bg-brand-navydark text-white',
+    green: 'bg-brand-green hover:bg-brand-greendark text-white',
     ghost: 'bg-white border border-stone-300 hover:bg-stone-50 text-stone-700',
     danger: 'bg-white border border-red-300 hover:bg-red-50 text-red-700',
   };
@@ -66,7 +67,7 @@ export const Tabs = ({ tabs, active, onChange }) => (
         onClick={() => onChange(t)}
         className={`px-4 py-2 text-sm font-semibold whitespace-nowrap rounded-t-lg cursor-pointer border-b-2 -mb-px transition-colors ${
           active === t
-            ? 'border-emerald-700 text-emerald-800 bg-emerald-50'
+            ? 'border-brand-green text-brand-navy bg-brand-greenlight'
             : 'border-transparent text-stone-500 hover:text-stone-800'
         }`}
       >
@@ -81,10 +82,19 @@ export const fmt = (v, suffix = '') => (v == null ? '—' : `${round1(v)}${suffi
 export const StatusDot = ({ ok }) => (
   <span
     aria-label={ok ? 'connected' : 'not connected'}
-    className={`inline-block w-2.5 h-2.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-red-500'}`}
+    className={`inline-block w-2.5 h-2.5 rounded-full ${ok ? 'bg-brand-green' : 'bg-red-500'}`}
   />
 );
 
 export const Spinner = () => (
-  <span className="inline-block w-4 h-4 border-2 border-emerald-700 border-t-transparent rounded-full animate-spin align-middle" aria-label="loading" />
+  <span className="inline-block w-4 h-4 border-2 border-brand-navy border-t-transparent rounded-full animate-spin align-middle" aria-label="loading" />
+);
+
+// Small labeled big-number tile used across drilldowns
+export const Tile = ({ value, label, sub, accent = 'text-brand-navy' }) => (
+  <div className="bg-stone-50 rounded-lg p-3 text-center">
+    <div className={`text-2xl font-extrabold ${accent}`}>{value ?? '—'}</div>
+    <div className="text-[11px] font-semibold text-stone-500 uppercase tracking-wide mt-0.5">{label}</div>
+    {sub && <div className="text-[11px] text-stone-400 mt-0.5">{sub}</div>}
+  </div>
 );

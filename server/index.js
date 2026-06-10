@@ -2,12 +2,15 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
+import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
-import Anthropic from '@anthropic-ai/sdk';
+import { buildPeople } from './vfairsData.js';
 
 dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const EXPORT_XLSX = path.join(__dirname, '..', 'data', 'vfairs-export.xlsx');
 const CACHE_DIR = path.join(__dirname, 'cache');
 if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
 
@@ -102,6 +105,42 @@ app.get('/api/vfairs/registrants', async (req, res) => {
     res.json({ ...payload, source: 'api' });
   } catch (err) {
     const cached = readCache('vfairs');
+    if (cached) return res.json({ ...cached, source: 'cache', error: String(err.message) });
+    res.status(502).json({ error: String(err.message) });
+  }
+});
+
+// Enriched people dataset: API attendees merged with the xlsx export's roles,
+// badge check-in log, and user-journey app engagement, with ARB's cleaning
+// rules applied (staff exclusions, dedupe, speaker no-show handling).
+app.get('/api/vfairs/people', async (req, res) => {
+  const refresh = req.query.refresh === '1';
+  if (!refresh) {
+    const cached = readCache('people');
+    if (cached) return res.json({ ...cached, source: 'cache' });
+  }
+  try {
+    let apiUsers = [];
+    let apiError = null;
+    try {
+      const cachedApi = !refresh && readCache('vfairs');
+      apiUsers = cachedApi ? cachedApi.data : await vfairsFetchAll();
+      if (!cachedApi) writeCache('vfairs', apiUsers);
+    } catch (e) {
+      apiError = String(e.message);
+      const cachedApi = readCache('vfairs');
+      if (cachedApi) apiUsers = cachedApi.data;
+    }
+    if (!fs.existsSync(EXPORT_XLSX)) {
+      return res.status(500).json({
+        error: `vFairs export workbook not found at ${EXPORT_XLSX}. Place "vfairs reports export.xlsx" there (tabs: registered, checked in, user journey stats).`,
+      });
+    }
+    const data = buildPeople(apiUsers, EXPORT_XLSX);
+    const payload = writeCache('people', data);
+    res.json({ ...payload, source: 'api+xlsx', apiError });
+  } catch (err) {
+    const cached = readCache('people');
     if (cached) return res.json({ ...cached, source: 'cache', error: String(err.message) });
     res.status(502).json({ error: String(err.message) });
   }
@@ -207,27 +246,83 @@ app.get('/api/jotform/submissions', async (req, res) => {
   }
 });
 
-// ---------- Anthropic ----------
+// ---------- AI (Claude subscription via local CLI) ----------
 const BRAND_RULES = `Brand rules (mandatory): write "Food is Medicine" with a lowercase "is" always; write "FIMCON" in all caps always; tone is professional, confident, and movement-building. NEVER compute, mention, or reference Net Promoter Score or NPS — the "Would you recommend FIMCON to a colleague?" question is reported only as a simple average labeled "Avg recommendation score".`;
 
-function anthropicClient() {
-  if (!process.env.ANTHROPIC_API_KEY) {
-    const e = new Error('ANTHROPIC_API_KEY is not set. Add it to .env and restart the server.');
-    e.status = 400;
-    throw e;
+// AI generation runs through the locally-installed Claude CLI in print mode,
+// which uses the machine's existing Claude subscription auth — no ANTHROPIC_API_KEY
+// required. Resolve the binary from CLAUDE_BIN, then the path Claude Code injects
+// (CLAUDE_CODE_EXECPATH), then `claude` on PATH.
+// Resolve the Claude Code executable: explicit override → the path Claude Code
+// injects → newest version in the standard install dir → bare `claude` on PATH.
+function resolveClaudeBin() {
+  if (process.env.CLAUDE_BIN) return process.env.CLAUDE_BIN;
+  if (process.env.CLAUDE_CODE_EXECPATH && fs.existsSync(process.env.CLAUDE_CODE_EXECPATH)) {
+    return process.env.CLAUDE_CODE_EXECPATH;
   }
-  return new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  try {
+    const appData = process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming');
+    const base = path.join(appData, 'Claude', 'claude-code');
+    const exe = process.platform === 'win32' ? 'claude.exe' : 'claude';
+    if (fs.existsSync(base)) {
+      const found = fs
+        .readdirSync(base)
+        .map((v) => path.join(base, v, exe))
+        .filter((p) => fs.existsSync(p))
+        .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+      if (found.length) return found[0];
+    }
+  } catch {
+    /* fall through to PATH */
+  }
+  return 'claude';
 }
+const CLAUDE_BIN = resolveClaudeBin();
+const AI_MODEL = process.env.FIMCON_AI_MODEL || 'claude-sonnet-4-5';
 
-async function askClaude(system, user, maxTokens = 600) {
-  const client = anthropicClient();
-  const msg = await client.messages.create({
-    model: 'claude-sonnet-4-5',
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: 'user', content: user }],
+function askClaude(system, user /*, maxTokens */) {
+  return new Promise((resolve, reject) => {
+    const args = ['--print', '--model', AI_MODEL, '--output-format', 'text', '--max-turns', '1'];
+    if (system) args.push('--append-system-prompt', system);
+
+    let child;
+    try {
+      child = spawn(CLAUDE_BIN, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    } catch (e) {
+      const err = new Error(`Could not launch the Claude CLI ('${CLAUDE_BIN}'). Is Claude Code installed? ${e.message}`);
+      err.status = 500;
+      return reject(err);
+    }
+
+    let out = '';
+    let errOut = '';
+    child.on('error', (e) => {
+      const err = new Error(`Could not launch the Claude CLI ('${CLAUDE_BIN}'). Is Claude Code installed and on PATH? ${e.message}`);
+      err.status = 500;
+      reject(err);
+    });
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => (errOut += d));
+    child.on('close', (code) => {
+      const text = out.trim();
+      const combined = `${text}\n${errOut}`.toLowerCase();
+      if (combined.includes('not logged in') || combined.includes('please run /login')) {
+        const err = new Error(
+          'The Claude CLI is not logged in. In a terminal run `claude`, then `/login` and sign in with your Claude subscription account — then restart this server. No API key needed.'
+        );
+        err.status = 401;
+        return reject(err);
+      }
+      if (code === 0 && text) return resolve(text);
+      const err = new Error(`Claude CLI failed (exit ${code}): ${(errOut || text || 'no output').slice(0, 400)}`);
+      err.status = 502;
+      reject(err);
+    });
+
+    // Feed the user prompt over stdin so large payloads don't hit argv limits.
+    child.stdin.write(user || '');
+    child.stdin.end();
   });
-  return msg.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
 }
 
 app.post('/api/ai/insight', async (req, res) => {
@@ -279,10 +374,27 @@ app.post('/api/ai/narrative', async (req, res) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({
-    ok: true,
-    anthropicKeySet: !!process.env.ANTHROPIC_API_KEY,
-  });
+  // Probe the Claude CLI so the UI can tell whether AI features are ready.
+  let done = false;
+  let reachable = false;
+  const finish = () =>
+    done || ((done = true), res.json({
+      ok: true,
+      aiProvider: 'claude-subscription-cli',
+      cliBinary: CLAUDE_BIN,
+      cliReachable: reachable,
+    }));
+  try {
+    const probe = spawn(CLAUDE_BIN, ['--version'], { stdio: ['ignore', 'pipe', 'pipe'] });
+    probe.on('error', finish);
+    probe.on('close', (code) => {
+      reachable = code === 0;
+      finish();
+    });
+    setTimeout(finish, 4000);
+  } catch {
+    finish();
+  }
 });
 
 const PORT = process.env.API_PORT || 3001;

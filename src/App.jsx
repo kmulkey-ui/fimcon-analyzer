@@ -25,34 +25,41 @@ export default function App() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <header className="bg-emerald-900 text-white no-print">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6">
-          <div className="flex items-center justify-between py-4">
-            <div>
-              <h1 className="text-lg sm:text-xl font-extrabold tracking-tight">
-                FIMCON 2026 <span className="font-medium text-emerald-200">Event Performance Analyzer</span>
-              </h1>
-              <p className="text-xs text-emerald-300 mt-0.5">
-                Food is Medicine · June 1–2, 2026 · Grand Hyatt Washington · ARB Meetings &amp; Events
-              </p>
+      <header className="no-print">
+        {/* Brand bar */}
+        <div className="bg-white border-b border-stone-200">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-4 min-w-0">
+              <img
+                src="/fimcon-logo.png"
+                alt="FIMCON 2026 — Food is Medicine Conference"
+                className="h-10 sm:h-12 w-auto shrink-0"
+              />
+              <div className="hidden md:block border-l border-stone-200 pl-4">
+                <div className="text-sm font-extrabold text-brand-navy tracking-tight">Event Performance Analyzer</div>
+                <div className="text-xs text-stone-500">June 1–2, 2026 · Grand Hyatt Washington · ARB Meetings &amp; Events</div>
+              </div>
             </div>
             <button
               onClick={() => setCriteriaOpen(true)}
-              className="hidden sm:inline-flex px-3.5 py-2 rounded-lg text-sm font-semibold bg-emerald-700 hover:bg-emerald-600 cursor-pointer transition-colors"
+              className="hidden sm:inline-flex px-3.5 py-2 rounded-lg text-sm font-semibold bg-brand-orange hover:bg-[#d96f12] text-white cursor-pointer transition-colors"
             >
               Edit criteria
             </button>
           </div>
-          <nav className="flex gap-1 overflow-x-auto -mb-px pb-0" aria-label="Sections">
+        </div>
+        {/* Nav bar */}
+        <div className="bg-brand-navy">
+          <nav className="max-w-7xl mx-auto px-4 sm:px-6 flex gap-1 overflow-x-auto" aria-label="Sections">
             {SECTIONS.map(([id, label]) => (
               <button
                 key={id}
                 onClick={() => setSection(id)}
                 aria-current={section === id ? 'page' : undefined}
-                className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap rounded-t-lg cursor-pointer transition-colors ${
+                className={`px-4 py-2.5 text-sm font-semibold whitespace-nowrap cursor-pointer transition-colors border-b-[3px] ${
                   section === id
-                    ? 'bg-stone-50 text-emerald-900'
-                    : 'text-emerald-100 hover:bg-emerald-800'
+                    ? 'border-brand-green text-white bg-brand-navydark'
+                    : 'border-transparent text-blue-100 hover:bg-brand-navydark/60'
                 }`}
               >
                 {label}
@@ -73,13 +80,13 @@ export default function App() {
       </main>
 
       <footer className="no-print text-center text-xs text-stone-400 py-4">
-        FIMCON 2026 · Food is Medicine · Prepared for funders and the steering committee
+        FIMCON 2026 · Food is Medicine Conference · Prepared for funders and the steering committee
       </footer>
 
-      {/* Floating edit-criteria button (mobile / everywhere) */}
+      {/* Floating edit-criteria button (mobile) */}
       <button
         onClick={() => setCriteriaOpen(true)}
-        className="no-print fixed bottom-5 right-5 sm:hidden bg-emerald-700 hover:bg-emerald-800 text-white rounded-full shadow-lg px-4 py-3 text-sm font-semibold cursor-pointer"
+        className="no-print fixed bottom-5 right-5 sm:hidden bg-brand-orange hover:bg-[#d96f12] text-white rounded-full shadow-lg px-4 py-3 text-sm font-semibold cursor-pointer"
         aria-label="Edit criteria"
       >
         Edit criteria

@@ -8,6 +8,7 @@ import {
   colFor, matrixColsFor, subLabel, distributionFor, splitMulti, round1, registrantMetrics,
 } from '../lib/compute';
 import { PLENARIES, BREAKOUTS, CLOSED_DOOR_NOTE, sessionStats, breakoutBlocks } from '../lib/sessions';
+import { AI_ENABLED } from '../lib/runtime';
 
 const TABS = ['Attendance', 'Engagement', 'Survey'];
 
@@ -163,7 +164,7 @@ function questionLabel(keys, n) {
 }
 
 function SurveyTab() {
-  const { surveyRows, metrics, registrants, evaluation, emailJoin } = useApp();
+  const { surveyRows, metrics, apiPeople, evaluation, emailJoin } = useApp();
   const [qn, setQn] = useState(1);
   const [insights, setInsights] = useState({});
   const [loading, setLoading] = useState({});
@@ -185,7 +186,7 @@ function SurveyTab() {
   if (!rows.length)
     return <Card>No survey data loaded. Sync Jotform or upload the survey CSV on the Data Input tab.</Card>;
 
-  const reg = registrantMetrics(registrants);
+  const reg = registrantMetrics(apiPeople);
   const crossContext = {
     checkinRate: round1(metrics.checkinRate),
     invitedNoShowRate: round1(metrics.invitedNoShowRate),
@@ -266,9 +267,11 @@ function SurveyTab() {
             </button>
           );
         })}
-        <Btn className="w-full mt-3" onClick={analyzeThemes} disabled={themesLoading}>
-          {themesLoading ? <Spinner /> : 'Analyze all open-ended themes'}
-        </Btn>
+        {AI_ENABLED && (
+          <Btn className="w-full mt-3" onClick={analyzeThemes} disabled={themesLoading}>
+            {themesLoading ? <Spinner /> : 'Analyze all open-ended themes'}
+          </Btn>
+        )}
       </div>
 
       {/* Question detail */}
@@ -473,9 +476,11 @@ function QuestionDetail({ n, rows, keys, segment, setSegment, emailJoin, onInsig
             {n === 20 && ' · reported as a simple average only'}
           </p>
         </div>
-        <Btn onClick={() => onInsight(n, distribution)} disabled={insightLoading}>
-          {insightLoading ? <Spinner /> : 'Generate insight'}
-        </Btn>
+        {AI_ENABLED && (
+          <Btn onClick={() => onInsight(n, distribution)} disabled={insightLoading}>
+            {insightLoading ? <Spinner /> : 'Generate insight'}
+          </Btn>
+        )}
       </div>
 
       {!isOpen && !isMatrix && !isMulti && (
@@ -501,6 +506,21 @@ function QuestionDetail({ n, rows, keys, segment, setSegment, emailJoin, onInsig
       )}
 
       <div className="mt-4">{body}</div>
+
+      {n === 19 && col && (() => {
+        const { counts, n: total } = distributionFor(rows, col);
+        const yes = Object.entries(counts)
+          .filter(([k]) => k.toLowerCase().includes('yes'))
+          .reduce((a, [, v]) => a + v, 0);
+        if (!total) return null;
+        return (
+          <p className="mt-3 text-sm font-semibold text-emerald-900 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+            Counting responses featuring &ldquo;yes&rdquo;, the return intent (% would attend again) would be{' '}
+            {round1((yes / total) * 100)}% ({yes} of {total}).
+          </p>
+        );
+      })()}
+
       {segmentBody}
 
       {insight && (

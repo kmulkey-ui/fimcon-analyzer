@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev"],
       "port": 5173,
       "cwd": "C:\\Users\\kmulk\\fimcon-analyzer"
+    },
+    {
+      "name": "fimcon-static",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "preview"],
+      "port": 4173,
+      "cwd": "C:\\Users\\kmulk\\fimcon-analyzer"
     }
   ]
 }

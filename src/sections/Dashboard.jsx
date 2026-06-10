@@ -7,9 +7,9 @@ import { round1, STATUS_STYLES, registrantMetrics, downloadCSV, isInvited } from
 const WEIGHT_LABEL = { high: 'High priority', medium: 'Medium priority', low: 'Low priority' };
 
 export default function Dashboard() {
-  const { metrics, evaluation, registrants, narrative } = useApp();
+  const { metrics, evaluation, apiPeople, narrative } = useApp();
   const { results, score, rating } = evaluation;
-  const reg = registrantMetrics(registrants);
+  const reg = registrantMetrics(apiPeople);
   const printRef = useRef(null);
   const handlePrint = useReactToPrint({ contentRef: printRef, documentTitle: 'FIMCON 2026 Performance Summary' });
 

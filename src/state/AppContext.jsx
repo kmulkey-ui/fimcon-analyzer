@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, useCallback } from 'react';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
-import { DEFAULT_CRITERIA, buildMetrics, evaluateAll, isInvited } from '../lib/compute';
+import { DEFAULT_CRITERIA, buildMetrics, evaluateAll, isInvited, noShowBreakdown } from '../lib/compute';
+import { STATIC_BUILD } from '../lib/runtime';
 
 const Ctx = createContext(null);
 export const useApp = () => useContext(Ctx);
@@ -10,6 +11,7 @@ const LS = {
   criteria: 'fimcon.criteria',
   manual: 'fimcon.manual',
   benchmarks: 'fimcon.benchmarks',
+  survey: 'fimcon.survey', // locally-uploaded survey CSV (published build only)
 };
 const load = (k, fallback) => {
   try {
@@ -21,8 +23,14 @@ const load = (k, fallback) => {
 };
 
 export function AppProvider({ children }) {
-  const [registrants, setRegistrants] = useState([]);
-  const [registrantSource, setRegistrantSource] = useState(null); // {source, syncedAt, error}
+  // Cleaned, deduped people (API + xlsx merge with hygiene rules applied)
+  const [people, setPeople] = useState([]);
+  const [hygiene, setHygiene] = useState(null);
+  const [checkinFlow, setCheckinFlow] = useState({});
+  const [journeySummary, setJourneySummary] = useState({});
+  const [registrationTimeline, setRegistrationTimeline] = useState([]);
+  const [peopleSource, setPeopleSource] = useState(null);
+
   const [surveyRows, setSurveyRows] = useState([]);
   const [surveySource, setSurveySource] = useState(null);
   const [priorRows, setPriorRows] = useState([]);
@@ -40,30 +48,53 @@ export function AppProvider({ children }) {
   useEffect(() => localStorage.setItem(LS.manual, JSON.stringify(manual)), [manual]);
   useEffect(() => localStorage.setItem(LS.benchmarks, JSON.stringify(benchmarks)), [benchmarks]);
 
-  const fetchVfairs = useCallback(async (refresh = false) => {
-    setRegistrantSource((s) => ({ ...s, loading: true }));
+  const fetchPeople = useCallback(async (refresh = false) => {
+    setPeopleSource((s) => ({ ...s, loading: true }));
     try {
-      const r = await fetch(`/api/vfairs/registrants${refresh ? '?refresh=1' : ''}`);
+      // Published build: load the baked, PII-stripped snapshot (no backend).
+      // Local dev: pull live from the Express/vFairs API.
+      const url = STATIC_BUILD ? '/data/people.json' : `/api/vfairs/people${refresh ? '?refresh=1' : ''}`;
+      const r = await fetch(url);
       const j = await r.json();
       if (j.error && !j.data) throw new Error(j.error);
-      setRegistrants(j.data || []);
-      setRegistrantSource({ source: j.source, syncedAt: j.syncedAt, error: j.error || null, loading: false });
+      setPeople(j.data.people || []);
+      setHygiene(j.data.hygiene || null);
+      setCheckinFlow(j.data.checkinFlow || {});
+      setJourneySummary(j.data.journeySummary || {});
+      setRegistrationTimeline(j.data.registrationTimeline || []);
+      setPeopleSource({ source: STATIC_BUILD ? 'snapshot' : j.source, syncedAt: j.syncedAt, apiError: j.apiError || null, error: j.error || null, loading: false });
     } catch (e) {
-      setRegistrantSource({ source: null, error: String(e.message), loading: false });
+      setPeopleSource({ source: null, error: String(e.message), loading: false });
     }
   }, []);
 
   const fetchJotform = useCallback(async (refresh = false) => {
     setSurveySource((s) => ({ ...s, loading: true }));
     try {
-      const r = await fetch(`/api/jotform/submissions${refresh ? '?refresh=1' : ''}`);
+      const url = STATIC_BUILD ? '/data/jotform.json' : `/api/jotform/submissions${refresh ? '?refresh=1' : ''}`;
+      const r = await fetch(url);
       const j = await r.json();
       if (j.error && !j.data) throw new Error(j.error);
-      setSurveyRows(j.data?.rows || []);
+      let rows = j.data?.rows || [];
+      let syncedAt = j.syncedAt;
+      let source = STATIC_BUILD ? 'snapshot' : j.source;
+      let formTitle = j.data?.formTitle;
+      // Published build: if the user uploaded a newer survey CSV in this browser,
+      // prefer it over the baked baseline (lets responses be topped up post-deploy).
+      if (STATIC_BUILD) {
+        const up = load(LS.survey, null);
+        if (up?.rows?.length && (!syncedAt || new Date(up.syncedAt) >= new Date(syncedAt))) {
+          rows = up.rows;
+          syncedAt = up.syncedAt;
+          source = 'upload';
+          formTitle = up.formTitle || formTitle;
+        }
+      }
+      setSurveyRows(rows);
       setSurveySource({
-        source: j.source,
-        syncedAt: j.syncedAt,
-        formTitle: j.data?.formTitle,
+        source,
+        syncedAt,
+        formTitle,
         formId: j.data?.formId,
         error: j.error || null,
         loading: false,
@@ -73,10 +104,17 @@ export function AppProvider({ children }) {
     }
   }, []);
 
-  useEffect(() => {
-    fetchVfairs();
+  // Published build: clear a locally-uploaded survey CSV and fall back to the
+  // baked snapshot baseline.
+  const clearSurveyUpload = useCallback(() => {
+    try { localStorage.removeItem(LS.survey); } catch { /* ignore */ }
     fetchJotform();
-  }, [fetchVfairs, fetchJotform]);
+  }, [fetchJotform]);
+
+  useEffect(() => {
+    fetchPeople();
+    fetchJotform();
+  }, [fetchPeople, fetchJotform]);
 
   // ---- fallback uploads ----
   const validateSurvey = (rows) => {
@@ -98,8 +136,16 @@ export function AppProvider({ children }) {
           if (err) return resolve(err);
           if (target === 'prior') setPriorRows(data);
           else {
+            const syncedAt = new Date().toISOString();
             setSurveyRows(data);
-            setSurveySource({ source: 'upload', syncedAt: new Date().toISOString(), loading: false });
+            // Published build: persist so the topped-up survey survives reloads in
+            // this browser (no backend to store it server-side).
+            if (STATIC_BUILD) {
+              try {
+                localStorage.setItem(LS.survey, JSON.stringify({ syncedAt, rows: data, formTitle: 'Uploaded CSV' }));
+              } catch { /* quota / private mode — keep in-memory only */ }
+            }
+            setSurveySource({ source: 'upload', syncedAt, formTitle: 'Uploaded CSV', loading: false });
           }
           resolve(null);
         },
@@ -107,13 +153,14 @@ export function AppProvider({ children }) {
       });
     });
 
+  // Fallback registrant xlsx upload → maps to the same people shape (roles
+  // unknown unless a User Role column exists; no journey data).
   const uploadRegistrantXlsx = async (file) => {
     const buf = await file.arrayBuffer();
     const wb = XLSX.read(buf);
     const ws = wb.Sheets[wb.SheetNames[0]];
     const raw = XLSX.utils.sheet_to_json(ws, { defval: '' });
     if (!raw.length) return 'Workbook contained no rows.';
-    // best-effort column mapping to the normalized registrant shape
     const keys = Object.keys(raw[0]);
     const find = (...pats) =>
       keys.find((k) => pats.some((p) => k.toLowerCase().includes(p)));
@@ -123,38 +170,52 @@ export function AppProvider({ children }) {
       email: find('email'),
       ticket: find('ticket', 'package', 'registration type'),
       checkin: find('check-in', 'checked in', 'checkin', 'attendance'),
+      role: find('user role', 'role'),
       state: find('state'),
       org: find('organization', 'company'),
       job: find('job title', 'title'),
       sector: find('describes your primary organization', 'sector'),
-      regDate: find('registration date', 'registered'),
+      regDate: find('registration date', 'date registered', 'registered'),
     };
-    const normalized = raw.map((r, i) => ({
-      id: i,
-      firstName: r[map.first] || '',
-      lastName: r[map.last] || '',
-      name: `${r[map.first] || ''} ${r[map.last] || ''}`.trim(),
-      email: String(r[map.email] || '').toLowerCase(),
-      ticketType: String(r[map.ticket] || 'UNSPECIFIED').trim(),
-      checkedIn: /yes|true|1|checked/i.test(String(r[map.checkin] || '')),
-      state: r[map.state] || '',
-      organization: r[map.org] || '',
-      jobTitle: r[map.job] || '',
-      sector: r[map.sector] || '',
-      registeredAt: r[map.regDate] || null,
-    }));
-    setRegistrants(normalized);
-    setRegistrantSource({ source: 'upload', syncedAt: new Date().toISOString(), loading: false, columnMap: map });
+    const seen = new Set();
+    const normalized = [];
+    for (const [i, r] of raw.entries()) {
+      const email = String(r[map.email] || '').toLowerCase().trim();
+      if (email && seen.has(email)) continue;
+      seen.add(email);
+      const role = String(r[map.role] || 'Attendee').trim();
+      normalized.push({
+        id: i,
+        firstName: r[map.first] || '',
+        lastName: r[map.last] || '',
+        name: `${r[map.first] || ''} ${r[map.last] || ''}`.trim(),
+        email,
+        roles: [role],
+        role,
+        isSpeaker: /speaker/i.test(role),
+        ticketType: String(r[map.ticket] || '').trim() || null,
+        checkedIn: /yes|true|1|checked/i.test(String(r[map.checkin] || '')),
+        state: r[map.state] || '',
+        organization: r[map.org] || '',
+        jobTitle: r[map.job] || '',
+        sector: r[map.sector] || '',
+        registeredAt: r[map.regDate] || null,
+        journey: null,
+      });
+    }
+    setPeople(normalized);
+    setHygiene(null);
+    setPeopleSource({ source: 'upload', syncedAt: new Date().toISOString(), loading: false, columnMap: map });
     return null;
   };
 
   // ---- email join: survey rows -> invited/paid (if survey captures email) ----
   const emailJoin = useMemo(() => {
-    if (!surveyRows.length || !registrants.length) return { available: false };
+    if (!surveyRows.length || !people.length) return { available: false };
     const keys = Object.keys(surveyRows[0]);
     const emailKey = keys.find((k) => /e-?mail/i.test(k));
     if (!emailKey) return { available: false };
-    const regByEmail = new Map(registrants.map((r) => [r.email, r]));
+    const regByEmail = new Map(people.map((p) => [p.email, p]));
     let joined = 0;
     const tagged = surveyRows.map((row) => {
       const reg = regByEmail.get(String(row[emailKey] || '').toLowerCase().trim());
@@ -162,17 +223,33 @@ export function AppProvider({ children }) {
       return { row, cohort: reg ? (isInvited(reg.ticketType) ? 'invited' : 'paid') : null };
     });
     return { available: joined > 0, joined, tagged };
-  }, [surveyRows, registrants]);
+  }, [surveyRows, people]);
+
+  // Registration vs. no-show base = the live vFairs API pull only. People in the
+  // historical xlsx snapshot but absent from the API (cancelled/withdrawn) are
+  // dropped. Falls back to the full set when no API flag is present (xlsx upload).
+  const apiPeople = useMemo(() => {
+    const apiKnown = people.some((p) => p.apiRegistered);
+    return apiKnown ? people.filter((p) => p.apiRegistered) : people;
+  }, [people]);
+
+  const noShowAnalysis = useMemo(() => noShowBreakdown(people), [people]);
 
   const metrics = useMemo(
-    () => buildMetrics({ registrants, surveyRows, manual: numifyManual(manual) }),
-    [registrants, surveyRows, manual]
+    () => buildMetrics({ people: apiPeople, surveyRows, manual: numifyManual(manual) }),
+    [apiPeople, surveyRows, manual]
   );
   const evaluation = useMemo(() => evaluateAll(criteria, metrics), [criteria, metrics]);
 
   const value = {
-    registrants,
-    registrantSource,
+    people,
+    apiPeople,
+    noShowAnalysis,
+    hygiene,
+    checkinFlow,
+    journeySummary,
+    registrationTimeline,
+    peopleSource,
     surveyRows,
     surveySource,
     priorRows,
@@ -190,10 +267,12 @@ export function AppProvider({ children }) {
     setNarrative,
     criteriaOpen,
     setCriteriaOpen,
-    fetchVfairs,
+    fetchPeople,
     fetchJotform,
+    clearSurveyUpload,
     uploadSurveyCSV,
     uploadRegistrantXlsx,
+    staticBuild: STATIC_BUILD,
   };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

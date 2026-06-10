@@ -3,3 +3,7 @@ dist
 .env
 server/cache/*.json
 *.local
+
+# Raw vFairs export contains attendee names/emails — never commit it.
+# (Root-level only: public/data/ holds the PII-stripped published snapshot.)
+/data/

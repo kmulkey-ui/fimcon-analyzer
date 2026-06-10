@@ -1,4 +1,6 @@
-// Computation logic ported from the working prototype — preserve exactly.
+// Computation logic ported from the working prototype — preserve exactly —
+// plus the cleaned-cohort rules requested by ARB (staff exclusions, unique
+// users, speaker no-show handling) and user-journey engagement metrics.
 import { sessionStats } from './sessions';
 
 export const round1 = (n) =>
@@ -78,8 +80,16 @@ export function surveyMetrics(rows) {
     return o;
   });
 
-  const q19 = pctMatching(trimmed, keys, 19, (v) => v.startsWith('yes') || v.includes('definitely'));
-  const q14 = pctMatching(trimmed, keys, 14, (v) => v.startsWith('yes'));
+  // Return intent (Q19): count any response featuring "yes" (e.g. "Definitely
+  // yes", "Probably yes"). The old matcher only caught "definitely" and silently
+  // dropped every "Probably yes" — understating return intent.
+  const q19 = pctMatching(trimmed, keys, 19, (v) => v.includes('yes'));
+  const q14 = pctMatching(trimmed, keys, 14, (v) => v.includes('yes'));
+
+  // Full Q19 distribution, surfaced so the UI can show the breakdown alongside
+  // the headline "% featuring yes" figure.
+  const q19col = colFor(keys, 19);
+  const returnIntentDist = q19col ? distributionFor(trimmed, q19col) : { counts: {}, n: 0 };
   if (import.meta.env?.DEV) {
     if (q19.unmatched.length) console.log('[dev] Q19 unmatched values:', [...new Set(q19.unmatched)]);
     if (q14.unmatched.length) console.log('[dev] Q14 unmatched values:', [...new Set(q14.unmatched)]);
@@ -116,18 +126,28 @@ export function surveyMetrics(rows) {
     avgNetworking: avgFor(trimmed, keys, 12),
     avgRecommend: avgFor(trimmed, keys, 20), // simple average only — NO NPS
     recommendScale,
-    pctReturn: q19.pct,
+    pctReturn: q19.pct, // % of responses featuring "yes" (would attend again)
+    returnIntentDist, // { counts: { 'Definitely yes': n, ... }, n }
     pctConnections: q14.pct,
     pctStrengthened: q8total ? (q8strength / q8total) * 100 : null,
   };
 }
 
-// ---------- vFairs metrics ----------
-export function registrantMetrics(registrants) {
-  if (!registrants?.length) return {};
+// ---------- cleaned people cohorts ----------
+// people = output of /api/vfairs/people (staff excluded, deduped by email).
+// Rules: speakers who never badge-checked-in are NOT no-shows — they are
+// acknowledged separately. Rates use the "accountable" base, which excludes
+// speaker non-check-ins so checkinRate + noShowRate = 100.
+export function peopleMetrics(people) {
+  if (!people?.length) return {};
+  const speakers = people.filter((p) => p.isSpeaker);
+  const nonSpeakers = people.filter((p) => !p.isSpeaker);
+  const speakersIn = speakers.filter((p) => p.checkedIn);
+  const speakersNotIn = speakers.filter((p) => !p.checkedIn);
+
   const cohort = (list) => {
     const registered = list.length;
-    const checkedIn = list.filter((r) => r.checkedIn).length;
+    const checkedIn = list.filter((p) => p.checkedIn).length;
     return {
       registered,
       checkedIn,
@@ -136,18 +156,143 @@ export function registrantMetrics(registrants) {
       noShowRate: registered ? 100 - (checkedIn / registered) * 100 : null,
     };
   };
-  const invited = registrants.filter((r) => isInvited(r.ticketType));
-  const paid = registrants.filter((r) => !isInvited(r.ticketType));
+
+  const invited = nonSpeakers.filter((p) => isInvited(p.ticketType));
+  const paid = nonSpeakers.filter((p) => !isInvited(p.ticketType));
+
+  const registered = people.length;
+  const checkedIn = people.filter((p) => p.checkedIn).length;
+  const accountable = registered - speakersNotIn.length;
+  const noShows = nonSpeakers.filter((p) => !p.checkedIn).length;
+
   return {
-    overall: cohort(registrants),
+    overall: {
+      registered,
+      checkedIn,
+      noShows,
+      accountable,
+      speakersNotCheckedIn: speakersNotIn.length,
+      checkinRate: accountable ? (checkedIn / accountable) * 100 : null,
+      noShowRate: accountable ? (noShows / accountable) * 100 : null,
+    },
     invited: cohort(invited),
     paid: cohort(paid),
+    speakers: {
+      registered: speakers.length,
+      checkedIn: speakersIn.length,
+      notCheckedIn: speakersNotIn.length,
+      checkinRate: speakers.length ? (speakersIn.length / speakers.length) * 100 : null,
+    },
+    speakersNotCheckedInList: speakersNotIn,
+  };
+}
+
+export { peopleMetrics as registrantMetrics };
+
+// ---------- API-based no-show analysis ----------
+// The registration vs. no-show comparison uses the live vFairs API pull as the
+// base — only currently-"Registered" attendees. People present in the historical
+// xlsx export but absent from the API have cancelled/withdrawn and are excluded.
+// Speakers who never badged in and registrants who used the event app but never
+// checked in are surfaced as separate noted groups; no-shows are reported both
+// with and without them, with full name lists to peruse.
+export function noShowBreakdown(people) {
+  if (!people?.length) return null;
+  const apiKnown = people.some((p) => p.apiRegistered);
+  const base = apiKnown ? people.filter((p) => p.apiRegistered) : people;
+  // Cancelled = in the xlsx snapshot but not in the live API, never checked in,
+  // not a speaker (e.g. the "unspecified" ghost registrations).
+  const cancelled = apiKnown
+    ? people.filter((p) => !p.apiRegistered && !p.isSpeaker && !p.checkedIn)
+    : [];
+
+  const speakers = base.filter((p) => p.isSpeaker);
+  const nonSpeakers = base.filter((p) => !p.isSpeaker);
+  const loggedIn = (p) => (p.journey?.logins || 0) > 0;
+
+  const speakersNoCheckin = speakers.filter((p) => !p.checkedIn);
+  const appNoCheckin = nonSpeakers.filter((p) => !p.checkedIn && loggedIn(p));
+  const hardNoShows = nonSpeakers.filter((p) => !p.checkedIn && !loggedIn(p));
+  const allNoShows = nonSpeakers.filter((p) => !p.checkedIn);
+
+  const registered = base.length;
+  const accountable = registered - speakersNoCheckin.length; // unbadged speakers set aside
+  const invited = nonSpeakers.filter((p) => isInvited(p.ticketType));
+  const paid = nonSpeakers.filter((p) => !isInvited(p.ticketType));
+  const pct = (a, b) => (b ? (a / b) * 100 : null);
+  const cohort = (list) => {
+    const ns = list.filter((p) => !p.checkedIn).length;
+    return { registered: list.length, noShows: ns, rate: pct(ns, list.length) };
+  };
+
+  return {
+    registered,
+    cancelledExcluded: cancelled.length,
+    checkedIn: base.filter((p) => p.checkedIn).length,
+    checkedInApiOnly: base.filter((p) => p.checkedInApi).length,
+    speakerCount: speakers.length,
+    nonSpeakerCount: nonSpeakers.length,
+    accountable,
+    // no-show count WITH all noted groups vs WITHOUT the app-login group
+    withAll: { count: allNoShows.length, base: accountable, rate: pct(allNoShows.length, accountable) },
+    withoutAppUsers: {
+      count: hardNoShows.length,
+      base: accountable - appNoCheckin.length,
+      rate: pct(hardNoShows.length, accountable - appNoCheckin.length),
+    },
+    invited: cohort(invited),
+    paid: cohort(paid),
+    lists: { cancelled, speakersNoCheckin, appNoCheckin, hardNoShows, allNoShows },
+  };
+}
+
+// ---------- user-journey engagement metrics ----------
+export function journeyMetrics(people) {
+  if (!people?.length) return {};
+  const active = people.filter((p) => p.journey);
+  const checkedIn = people.filter((p) => p.checkedIn);
+  const checkedInActive = checkedIn.filter((p) => p.journey);
+  const noShowEngaged = people.filter((p) => !p.checkedIn && !p.isSpeaker && p.journey);
+  const chatUsers = active.filter((p) => p.journey.chatClicks > 0);
+  const loginUsers = active.filter((p) => p.journey.logins > 0);
+  const notifUsers = active.filter((p) => p.journey.notifClicks > 0);
+  const sum = (L, k) => L.reduce((a, p) => a + (p.journey?.[k] || 0), 0);
+  const depth = { light: 0, regular: 0, power: 0 };
+  for (const p of active) {
+    const kinds = p.journey.activityKinds || 0;
+    if (kinds >= 4) depth.power += 1;
+    else if (kinds >= 2) depth.regular += 1;
+    else depth.light += 1;
+  }
+  return {
+    appActiveUsers: active.length,
+    appAdoptionRate: (active.length / people.length) * 100,
+    checkedInAdoptionRate: checkedIn.length ? (checkedInActive.length / checkedIn.length) * 100 : null,
+    activeCheckinRate: active.length ? (active.filter((p) => p.checkedIn).length / active.length) * 100 : null,
+    inactiveCheckinRate:
+      people.length - active.length
+        ? (people.filter((p) => !p.journey && p.checkedIn).length / (people.length - active.length)) * 100
+        : null,
+    noShowEngagedCount: noShowEngaged.length,
+    noShowEngagedList: noShowEngaged,
+    chatUsers: chatUsers.length,
+    chatUsageRate: checkedIn.length ? (chatUsers.length / checkedIn.length) * 100 : null,
+    notifUsers: notifUsers.length,
+    notifEngagementRate: active.length ? (notifUsers.length / active.length) * 100 : null,
+    totalLogins: sum(people, 'logins'),
+    avgLoginsPerActive: loginUsers.length ? sum(people, 'logins') / loginUsers.length : null,
+    totalMenuViews: sum(people, 'menuViews'),
+    totalChatClicks: sum(people, 'chatClicks'),
+    totalNotifClicks: sum(people, 'notifClicks'),
+    totalQrScans: sum(people, 'qrScans'),
+    depth,
   };
 }
 
 // ---------- combined metrics registry ----------
-export function buildMetrics({ registrants, surveyRows, manual }) {
-  const reg = registrantMetrics(registrants);
+export function buildMetrics({ people, surveyRows, manual }) {
+  const reg = peopleMetrics(people);
+  const journey = journeyMetrics(people);
   const survey = surveyMetrics(surveyRows);
   const sess = sessionStats();
   const responses = survey.responses ?? null;
@@ -162,30 +307,38 @@ export function buildMetrics({ registrants, surveyRows, manual }) {
     avgRecommend: survey.avgRecommend ?? null,
     recommendScale: survey.recommendScale ?? '1–5',
     pctReturn: survey.pctReturn ?? null,
+    returnIntentDist: survey.returnIntentDist ?? { counts: {}, n: 0 },
     pctConnections: survey.pctConnections ?? null,
     pctStrengthened: survey.pctStrengthened ?? null,
     surveyResponses: responses,
     responseRate:
       responses != null && checkedIn ? (responses / checkedIn) * 100 : null,
-    // vFairs
+    // cleaned vFairs cohorts
     registered: reg.overall?.registered ?? null,
     checkedIn,
     noShows: reg.overall?.noShows ?? null,
+    accountable: reg.overall?.accountable ?? null,
+    speakersNotCheckedIn: reg.overall?.speakersNotCheckedIn ?? null,
     checkinRate: reg.overall?.checkinRate ?? null,
     noShowRate: reg.overall?.noShowRate ?? null,
     invitedNoShowRate: reg.invited?.noShowRate ?? null,
     paidNoShowRate: reg.paid?.noShowRate ?? null,
+    speakerCheckinRate: reg.speakers?.checkinRate ?? null,
     // sessions
     peakAttendance: sess.peak,
     avgPlenary: sess.avgPlenary,
     avgBreakout: sess.avgBreakout,
     plenaryRetention: sess.plenaryRetention,
-    // manual engagement entries
-    appAdoptionRate: manual?.appAdoptionRate ?? null,
-    pushOpenRate: manual?.pushOpenRate ?? null,
+    // app engagement — manual entry overrides journey-derived values
+    appAdoptionRate: manual?.appAdoptionRate ?? journey.appAdoptionRate ?? null,
+    appAdoptionDerived: journey.appAdoptionRate ?? null,
+    pushOpenRate: manual?.pushOpenRate ?? journey.notifEngagementRate ?? null,
     pollParticipation: manual?.pollParticipation ?? null,
     resourceDownloads: manual?.resourceDownloads ?? null,
-    sessionOpens: manual?.sessionOpens ?? null,
+    sessionOpens: manual?.sessionOpens ?? journey.totalLogins ?? null,
+    chatUsageRate: journey.chatUsageRate ?? null,
+    noShowEngagedCount: journey.noShowEngagedCount ?? null,
+    avgLoginsPerActive: journey.avgLoginsPerActive ?? null,
   };
 }
 
@@ -204,14 +357,16 @@ export const METRIC_OPTIONS = [
   ['noShowRate', 'Overall no-show rate (%)'],
   ['invitedNoShowRate', 'Invited guest no-show rate (%)'],
   ['paidNoShowRate', 'Paid registrant no-show rate (%)'],
+  ['speakerCheckinRate', 'Speaker check-in rate (%)'],
   ['peakAttendance', 'Peak session attendance'],
   ['avgPlenary', 'Avg plenary attendance'],
   ['avgBreakout', 'Avg breakout attendance'],
   ['appAdoptionRate', 'App adoption rate (%)'],
-  ['pushOpenRate', 'Push open rate (%)'],
+  ['pushOpenRate', 'Push engagement rate (%)'],
+  ['chatUsageRate', 'App chat usage (% of attendees)'],
   ['pollParticipation', 'Poll/Q&A participation (%)'],
   ['resourceDownloads', 'Resource downloads (#)'],
-  ['sessionOpens', 'Session opens (#)'],
+  ['sessionOpens', 'App logins (#)'],
 ];
 
 // ---------- criteria ----------
@@ -274,14 +429,13 @@ export function evaluateAll(criteria, metrics) {
 
 export const STATUS_STYLES = {
   stretch: { label: '★ Stretch', pill: 'bg-teal-600 text-white', bar: 'bg-teal-600', text: 'text-teal-600' },
-  met: { label: 'Met', pill: 'bg-emerald-600 text-white', bar: 'bg-emerald-600', text: 'text-emerald-700' },
+  met: { label: 'Met', pill: 'bg-[#6CB142] text-white', bar: 'bg-[#6CB142]', text: 'text-[#4e8f2f]' },
   near: { label: 'Near', pill: 'bg-amber-500 text-white', bar: 'bg-amber-500', text: 'text-amber-600' },
   missed: { label: 'Missed', pill: 'bg-red-600 text-white', bar: 'bg-red-600', text: 'text-red-600' },
   nodata: { label: 'No data', pill: 'bg-stone-300 text-stone-700', bar: 'bg-stone-300', text: 'text-stone-500' },
 };
 
 export function findingSentence(r) {
-  const s = STATUS_STYLES[r.status].label.replace('★ ', '');
   const fmt = (v) => round1(v);
   if (r.status === 'nodata')
     return `No data is available yet for ${r.name.toLowerCase()}.`;

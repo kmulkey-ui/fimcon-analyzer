@@ -5,9 +5,9 @@ import { round1, surveyMetrics, registrantMetrics, colFor, avgFor } from '../lib
 import { BREAKOUTS, PLENARIES, CLOSED_DOOR_NOTE, sessionStats, breakoutBlocks } from '../lib/sessions';
 
 export default function Comparisons() {
-  const { surveyRows, priorRows, registrants, emailJoin } = useApp();
+  const { surveyRows, priorRows, apiPeople, emailJoin } = useApp();
   const s = sessionStats();
-  const reg = registrantMetrics(registrants);
+  const reg = registrantMetrics(apiPeople);
 
   return (
     <div className="space-y-6">

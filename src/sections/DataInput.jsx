@@ -13,9 +13,9 @@ const MANUAL_FIELDS = [
 
 export default function DataInput() {
   const {
-    registrants, registrantSource, surveyRows, surveySource,
-    fetchVfairs, fetchJotform, uploadSurveyCSV, uploadRegistrantXlsx,
-    manual, setManual, priorRows,
+    people, peopleSource, surveyRows, surveySource,
+    fetchPeople, fetchJotform, clearSurveyUpload, uploadSurveyCSV, uploadRegistrantXlsx,
+    manual, setManual, priorRows, staticBuild,
   } = useApp();
   const [uploadMsg, setUploadMsg] = useState({});
 
@@ -33,7 +33,9 @@ export default function DataInput() {
 
   return (
     <div className="space-y-6">
-      <SectionTitle sub="Live API sync status, fallback uploads, and manual engagement entry.">
+      <SectionTitle sub={staticBuild
+        ? 'Published snapshot. Registration & check-in are final; survey responses can be topped up by uploading the latest Jotform export below.'
+        : 'Live API sync status, fallback uploads, and manual engagement entry.'}>
         Data Input / Sync
       </SectionTitle>
 
@@ -41,33 +43,41 @@ export default function DataInput() {
         <Card>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 font-semibold text-stone-800">
-              <StatusDot ok={registrants.length > 0 && !registrantSource?.error} /> vFairs API
+              <StatusDot ok={people.length > 0 && !peopleSource?.error} /> {staticBuild ? 'vFairs (final)' : 'vFairs API'}
             </div>
-            <Btn variant="ghost" onClick={() => fetchVfairs(true)} disabled={registrantSource?.loading}>
-              {registrantSource?.loading ? <Spinner /> : 'Refresh'}
-            </Btn>
+            {!staticBuild && (
+              <Btn variant="ghost" onClick={() => fetchPeople(true)} disabled={peopleSource?.loading}>
+                {peopleSource?.loading ? <Spinner /> : 'Refresh'}
+              </Btn>
+            )}
           </div>
           <dl className="mt-3 text-sm text-stone-600 space-y-1">
-            <div className="flex justify-between"><dt>Registrants</dt><dd className="font-semibold text-stone-900">{registrants.length || '—'}</dd></div>
-            <div className="flex justify-between"><dt>Last sync</dt><dd>{sync(registrantSource)}</dd></div>
-            <div className="flex justify-between"><dt>Source</dt><dd>{registrantSource?.source || '—'}</dd></div>
+            <div className="flex justify-between"><dt>People records</dt><dd className="font-semibold text-stone-900">{people.length || '—'}</dd></div>
+            <div className="flex justify-between"><dt>{staticBuild ? 'Data as of' : 'Last sync'}</dt><dd>{sync(peopleSource)}</dd></div>
+            <div className="flex justify-between"><dt>Source</dt><dd>{peopleSource?.source || '—'}</dd></div>
           </dl>
-          {registrantSource?.error && <p className="mt-2 text-xs text-red-600">{registrantSource.error}</p>}
+          {peopleSource?.error && <p className="mt-2 text-xs text-red-600">{peopleSource.error}</p>}
         </Card>
 
         <Card>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 font-semibold text-stone-800">
-              <StatusDot ok={surveyRows.length > 0 && !surveySource?.error} /> Jotform API
+              <StatusDot ok={surveyRows.length > 0 && !surveySource?.error} /> {staticBuild ? 'Survey responses' : 'Jotform API'}
             </div>
-            <Btn variant="ghost" onClick={() => fetchJotform(true)} disabled={surveySource?.loading}>
-              {surveySource?.loading ? <Spinner /> : 'Refresh'}
-            </Btn>
+            {staticBuild ? (
+              surveySource?.source === 'upload' && (
+                <Btn variant="ghost" onClick={clearSurveyUpload}>Reset to published</Btn>
+              )
+            ) : (
+              <Btn variant="ghost" onClick={() => fetchJotform(true)} disabled={surveySource?.loading}>
+                {surveySource?.loading ? <Spinner /> : 'Refresh'}
+              </Btn>
+            )}
           </div>
           <dl className="mt-3 text-sm text-stone-600 space-y-1">
-            <div className="flex justify-between"><dt>Form</dt><dd className="font-semibold text-stone-900 truncate max-w-[160px]" title={surveySource?.formTitle}>{surveySource?.formTitle ? 'Found' : surveySource?.source === 'upload' ? 'CSV upload' : '—'}</dd></div>
+            <div className="flex justify-between"><dt>Source</dt><dd className="font-semibold text-stone-900">{surveySource?.source === 'upload' ? 'Your CSV upload' : surveySource?.source === 'snapshot' ? 'Published snapshot' : surveySource?.formTitle ? 'Found' : '—'}</dd></div>
             <div className="flex justify-between"><dt>Submissions</dt><dd className="font-semibold text-stone-900">{surveyRows.length || '—'}</dd></div>
-            <div className="flex justify-between"><dt>Last sync</dt><dd>{sync(surveySource)}</dd></div>
+            <div className="flex justify-between"><dt>{staticBuild ? 'As of' : 'Last sync'}</dt><dd>{sync(surveySource)}</dd></div>
           </dl>
           {surveySource?.error && <p className="mt-2 text-xs text-red-600">{surveySource.error}</p>}
         </Card>
@@ -85,11 +95,18 @@ export default function DataInput() {
       </div>
 
       <Card>
-        <h3 className="font-semibold text-stone-800 mb-3">Fallback uploads</h3>
+        <h3 className="font-semibold text-stone-800 mb-1">{staticBuild ? 'Update survey responses' : 'Fallback uploads'}</h3>
+        {staticBuild && (
+          <p className="text-xs text-stone-500 mb-3">
+            Survey responses are still coming in. To refresh the numbers, export the latest results from Jotform as a
+            CSV and upload it here — it updates every chart in this browser instantly and is remembered on this device.
+            To update the survey data everyone sees, re-publish the snapshot (see the README).
+          </p>
+        )}
         <div className="grid sm:grid-cols-3 gap-4 text-sm">
           {[
             ['xlsx', 'Registrant export (.xlsx)', '.xlsx'],
-            ['csv', 'Survey export (.csv)', '.csv'],
+            ['csv', staticBuild ? 'Latest survey export (.csv)' : 'Survey export (.csv)', '.csv'],
             ['prior', 'Prior-event survey (.csv)', '.csv'],
           ].map(([kind, label, accept]) => (
             <label key={kind} className="block">
@@ -130,10 +147,12 @@ export default function DataInput() {
         </div>
       </Card>
 
-      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-        Security note: the vFairs and Jotform API keys used to build this tool were shared in plaintext —
-        rotate both keys after the build and update <code>.env</code>.
-      </p>
+      {!staticBuild && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
+          Security note: the vFairs and Jotform API keys used to build this tool were shared in plaintext —
+          rotate both keys after the build and update <code>.env</code>.
+        </p>
+      )}
     </div>
   );
 }

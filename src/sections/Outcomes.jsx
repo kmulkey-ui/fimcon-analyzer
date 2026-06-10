@@ -2,16 +2,17 @@ import React, { useState } from 'react';
 import { useApp } from '../state/AppContext';
 import { SectionTitle, Card, Pill, ProgressBar, Btn, fmt, Spinner } from '../components/ui';
 import { round1, findingSentence, registrantMetrics, STATUS_STYLES } from '../lib/compute';
+import { AI_ENABLED } from '../lib/runtime';
 
 export default function Outcomes() {
-  const { evaluation, metrics, registrants, narrative, setNarrative } = useApp();
+  const { evaluation, metrics, apiPeople, narrative, setNarrative } = useApp();
   const { results, score, rating } = evaluation;
   const [loading, setLoading] = useState(false);
 
   const generateNarrative = async () => {
     setLoading(true);
     try {
-      const reg = registrantMetrics(registrants);
+      const reg = registrantMetrics(apiPeople);
       const res = await fetch('/api/ai/narrative', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,22 +93,24 @@ export default function Outcomes() {
         })}
       </div>
 
-      <Card className="bg-emerald-900 text-white border-emerald-900">
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <div>
-            <h3 className="font-bold">Funder-ready narrative</h3>
-            <p className="text-xs text-emerald-300 mt-0.5">
-              Claude writes a 4–6 sentence case-for-success paragraph from the full criteria results — misses framed forward-looking.
-            </p>
+      {AI_ENABLED && (
+        <Card className="bg-emerald-900 text-white border-emerald-900">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h3 className="font-bold">Funder-ready narrative</h3>
+              <p className="text-xs text-emerald-300 mt-0.5">
+                Claude writes a 4–6 sentence case-for-success paragraph from the full criteria results — misses framed forward-looking.
+              </p>
+            </div>
+            <Btn onClick={generateNarrative} disabled={loading} className="bg-white !text-emerald-900 hover:bg-emerald-50">
+              {loading ? <Spinner /> : narrative ? 'Regenerate narrative' : 'Generate narrative'}
+            </Btn>
           </div>
-          <Btn onClick={generateNarrative} disabled={loading} className="bg-white !text-emerald-900 hover:bg-emerald-50">
-            {loading ? <Spinner /> : narrative ? 'Regenerate narrative' : 'Generate narrative'}
-          </Btn>
-        </div>
-        {narrative && (
-          <p className="mt-4 text-sm leading-relaxed bg-emerald-800/60 rounded-lg p-4">{narrative}</p>
-        )}
-      </Card>
+          {narrative && (
+            <p className="mt-4 text-sm leading-relaxed bg-emerald-800/60 rounded-lg p-4">{narrative}</p>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

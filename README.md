@@ -4,12 +4,38 @@ Production event performance analysis app for ARB Meetings & Events.
 **Event:** FIMCON 2026 (Food is Medicine conference), June 1–2, 2026, Grand Hyatt Washington.
 **Audience:** funders and the steering committee.
 
-## Run
+## Two modes
+
+| | Internal (`npm run dev`) | Published site (Azure Static Web Apps) |
+|---|---|---|
+| Data | Live vFairs + Jotform APIs | Baked snapshot in `public/data/` |
+| Attendee names/emails/orgs | Full roster | **Stripped** — aggregates only |
+| AI insight/themes/narrative | Yes (local Claude CLI) | Hidden |
+| Survey updates | Refresh button | Upload latest Jotform CSV on Data Input (per-browser), or re-publish the snapshot (below) |
+
+## Run locally (internal version)
 
 ```bash
 npm install
 npm run dev        # Express API on :3001 + Vite on :5173 (proxied /api)
 ```
+
+## Publish / update the live site
+
+The live site is a static snapshot deployed by GitHub Actions to Azure Static Web Apps
+on every push to the default branch. To refresh the published survey numbers:
+
+```bash
+npm run dev        # let it sync, or hit Refresh on the Data Input tab, then stop it
+npm run snapshot   # bakes server/cache → public/data with all PII stripped
+git add public/data
+git commit -m "Update data snapshot"
+git push           # GitHub Action rebuilds and deploys automatically
+```
+
+`npm run snapshot` refuses to write if it finds any name/email/organization
+fields in the output. Never commit `data/` (raw vFairs export) or `.env` —
+both are gitignored.
 
 Create `.env` from `.env.example` (never commit it):
 
